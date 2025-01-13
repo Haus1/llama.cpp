@@ -169,7 +169,7 @@ static ggml_cuda_device_info ggml_cuda_init() {
 
         cudaDeviceProp prop;
         CUDA_CHECK(cudaGetDeviceProperties(&prop, id));
-        GGML_LOG_INFO("  Device %d: %s, compute capability %d.%d, VMM: %s\n", id, prop.name, prop.major, prop.minor, device_vmm ? "yes" : "no");
+        GGML_LOG_INFO("  Device %d: %s", id, prop.name);
 
         info.default_tensor_split[id] = total_vram;
         total_vram += prop.totalGlobalMem;
@@ -178,11 +178,28 @@ static ggml_cuda_device_info ggml_cuda_init() {
         info.devices[id].smpb  = prop.sharedMemPerBlock;
 #if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
         info.devices[id].smpbo = prop.sharedMemPerBlock;
-        info.devices[id].cc = 100*prop.major + 10*prop.minor + GGML_CUDA_CC_OFFSET_AMD;
+        // Device architectures are returned as gfxMmm with M the major as an integer and mm minor as hexadecimal
+        // we can treat it all as hexadecimal for simplicity
+        int archLen = strlen(prop.gcnArchName);
+        char archName[archLen + 1];
+        strcpy(archName, prop.gcnArchName);
+        int archMinor = (int)strtoul(&archName[archLen - 2], 0, 16);
+        archName[archLen - 2] = '\0';
+        int archMajor = (int)strtoul(&archName[3], 0, 16);
+        info.devices[id].cc = GGML_CUDA_CC_OFFSET_AMD + archMajor * 0x100;
+        if (archMajor != 8) {
+           info.devices[id].cc = info.devices[id].cc + archMinor;
+        }
+        GGML_LOG_INFO(", arch gfx%x%02x (0x%x)", archMajor, archMinor, info.devices[id].cc ^ GGML_CUDA_CC_OFFSET_AMD);
 #else
         info.devices[id].smpbo = prop.sharedMemPerBlockOptin;
         info.devices[id].cc = 100*prop.major + 10*prop.minor;
+        GGML_LOG_INFO(", compute capability %d.%d", prop.major, prop.minor);
 #endif // defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
+        GGML_LOG_INFO(", VMM: %s\n", device_vmm ? "yes" : "no");
+        if (prop.major < 1) {
+            GGML_LOG_WARN("Invalid compute version returned for device %d %s: %d\n", id, prop.name, prop.major);
+        }
     }
 
     for (int id = 0; id < info.device_count; ++id) {
